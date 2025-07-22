@@ -1,15 +1,21 @@
 # MCP HTTP Bridge
 
-A simple, reliable HTTP bridge for stdio MCP (Model Context Protocol) servers that enables browser-based applications to interact with MCP servers through standard HTTP requests.
+A simple, reliable HTTP bridge for both stdio and remote MCP (Model Context Protocol) servers that enables browser-based applications to interact with MCP servers through standard HTTP requests.
+
+Originally created to allow the [Live AI extension](https://github.com/fbgallet/roam-extension-live-ai-assistant) in Roam Research to connect to MCP servers, since web environments cannot directly use stdio communication.
 
 ## Features
 
 - **HTTP API with CORS**: Browser-friendly HTTP endpoints with full CORS support
-- **Process Management**: Spawns and manages MCP servers as child processes
+- **Multi-Transport Support**: Connect to local stdio, remote HTTP, and remote SSE MCP servers
+- **Process Management**: Spawns and manages local MCP servers as child processes
+- **Remote MCP Support**: Direct connections to remote MCP servers via HTTP or SSE with authentication
+- **Transport Auto-Detection**: Automatically detects transport type based on URL patterns
 - **Session Persistence**: Maintains session state between HTTP requests
 - **Environment Variables**: Support for configuring MCP servers with environment variables
-- **Multiple Server Support**: Run multiple MCP servers simultaneously
-- **JSON-RPC Forwarding**: Transparent forwarding of JSON-RPC messages between HTTP clients and stdio MCP servers
+- **Multiple Server Support**: Run multiple local and remote MCP servers simultaneously
+- **JSON-RPC Forwarding**: Transparent forwarding of JSON-RPC messages between HTTP clients and MCP servers
+- **Authentication Support**: Bearer token, API key, and Basic auth for remote servers
 - **Health Monitoring**: Built-in health checks and server status endpoints
 
 ## Installation
@@ -74,7 +80,7 @@ API_KEY=your_key node bridge.js --server "python -m my_mcp_server" --port 8000
 
 ### Advanced Configuration File Usage
 
-For multiple servers, expand your `config.json`:
+For multiple local and remote servers, expand your `config.json`:
 
 ```json
 {
@@ -91,21 +97,35 @@ For multiple servers, expand your `config.json`:
       "args": ["@anthropic/filesystem-mcp"],
       "env": {}
     },
-    "database": {
-      "command": "python",
-      "args": ["-m", "mcp_server_database"],
-      "env": {
-        "DATABASE_URL": "sqlite:///app.db"
-      }
+    "deepwiki-http": {
+      "type": "remote",
+      "url": "https://mcp.deepwiki.com/mcp",
+      "transport": "http"
+    },
+    "deepwiki-sse": {
+      "type": "remote",
+      "url": "https://mcp.deepwiki.com/sse",
+      "transport": "sse"
+    },
+    "remote-api": {
+      "type": "remote",
+      "url": "https://api.example.com/mcp",
+      "auth": {
+        "type": "bearer",
+        "token": "${API_KEY}"
+      },
+      "timeout": 30000
     }
   }
 }
 ```
 
 All servers will be accessible on the same port:
-- `http://localhost:8000/rpc/@readwise/readwise-mcp`
-- `http://localhost:8000/rpc/filesystem`
-- `http://localhost:8000/rpc/database`
+- `http://localhost:8000/rpc/@readwise/readwise-mcp` (local stdio)
+- `http://localhost:8000/rpc/filesystem` (local stdio)
+- `http://localhost:8000/rpc/deepwiki-http` (remote HTTP)
+- `http://localhost:8000/rpc/deepwiki-sse` (remote SSE)
+- `http://localhost:8000/rpc/remote-api` (remote HTTP with auth)
 
 ## API Endpoints
 
@@ -157,8 +177,14 @@ Get detailed status of all configured servers.
 ```json
 {
   "@readwise/readwise-mcp": {
+    "type": "local",
     "alive": true,
     "pid": 12345
+  },
+  "remote-claude": {
+    "type": "remote",
+    "alive": true,
+    "url": "https://api.anthropic.com/v1/mcp"
   }
 }
 ```
@@ -173,19 +199,91 @@ Get detailed status of all configured servers.
 
 ### Server Configuration
 
-Each server in the configuration file supports:
+#### Local Servers (stdio)
+
+Each local server in the configuration file supports:
 
 - `command`: The executable command (e.g., "npx", "python", "node")
 - `args`: Array of command arguments
 - `env`: Environment variables for the server process
 
+#### Remote Servers (HTTP/SSE)
+
+Each remote server supports:
+
+- `type`: Must be "remote"
+- `url`: Endpoint URL for the MCP server
+- `transport`: Transport type ("http" or "sse") - optional, auto-detected if not specified
+- `auth`: Authentication configuration (optional)
+  - `type`: Authentication type ("bearer", "apikey", "basic")
+  - `token`: Bearer token (for bearer auth)
+  - `key`: API key value (for apikey auth)
+  - `header`: Custom header name (for apikey auth, default: "X-API-Key")
+  - `username`/`password`: Credentials (for basic auth)
+- `timeout`: Request timeout in milliseconds (default: 30000)
+
+#### Transport Types
+
+The bridge supports multiple transport protocols for remote MCP servers:
+
+**HTTP Transport (default)**
+- Uses standard HTTP POST requests with JSON-RPC
+- Best for simple, stateless MCP servers
+- Example: `"url": "https://api.example.com/mcp"`
+
+**SSE Transport (Server-Sent Events)**
+- Uses persistent connections with bidirectional messaging
+- Better for servers requiring session management
+- Auto-detected for URLs ending in `/sse`
+- Example: `"url": "https://mcp.deepwiki.com/sse"`
+
+**Auto-Detection Rules:**
+- URLs ending with `/sse` → SSE transport
+- URLs containing `/sse/` or `sse.` → SSE transport  
+- All other URLs → HTTP transport
+- Explicit `"transport"` property overrides auto-detection
+
 ### Environment Variable Support
 
-Environment variables can be passed through in several ways:
+Environment variables can be used in both local and remote server configurations:
 
 1. **Direct in config**: Set actual values in the config file
-2. **Template substitution**: Use `${VAR_NAME}` syntax (future enhancement)
+2. **Template substitution**: Use `${VAR_NAME}` syntax for secure token management
 3. **Process environment**: Variables are automatically inherited
+
+Examples:
+```json
+{
+  "servers": {
+    "local-server": {
+      "command": "npx",
+      "args": ["@readwise/readwise-mcp"],
+      "env": {
+        "API_TOKEN": "${MY_API_TOKEN}"
+      }
+    },
+    "http-server": {
+      "type": "remote",
+      "url": "https://api.example.com/mcp",
+      "transport": "http",
+      "auth": {
+        "type": "bearer",
+        "token": "${REMOTE_API_KEY}"
+      }
+    },
+    "sse-server": {
+      "type": "remote",
+      "url": "https://mcp.deepwiki.com/sse",
+      "transport": "sse"
+    },
+    "auto-detected-sse": {
+      "type": "remote",
+      "url": "https://example.com/sse"
+      // transport: "sse" is auto-detected from URL
+    }
+  }
+}
+```
 
 ## Usage Examples
 
@@ -266,8 +364,21 @@ API_KEY=your_key node bridge.js --server "python -m my_mcp_server --verbose"
 - Check that the bridge is running on the expected port
 - Verify the server name in the URL matches your configuration
 
+### Transport-Specific Issues
+
+**HTTP Transport:**
+- Check that the remote server accepts POST requests
+- Verify authentication headers are correct
+- Ensure the server returns valid JSON responses
+
+**SSE Transport:**
+- Check that the server supports Server-Sent Events
+- Verify the server accepts persistent connections
+- Look for connection timeout or stream parsing errors
+
 ### Process Management
-- Servers are automatically restarted if they crash
+- Local servers are automatically restarted if they crash
+- Remote servers automatically reconnect on connection loss
 - Use `GET /servers` to check server status
 - Check console logs for detailed error information
 

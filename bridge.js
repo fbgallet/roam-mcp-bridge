@@ -5,6 +5,7 @@ const cors = require('cors');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { TransportFactory } = require('./transports');
 
 class MCPBridge {
   constructor() {
@@ -35,10 +36,19 @@ class MCPBridge {
     this.app.get('/servers', (req, res) => {
       const servers = {};
       this.mcpProcesses.forEach((process, name) => {
-        servers[name] = {
-          alive: process.process && !process.process.killed,
-          pid: process.process ? process.process.pid : null
-        };
+        if (process.type === 'remote') {
+          servers[name] = {
+            type: 'remote',
+            alive: true,
+            url: process.config.url
+          };
+        } else {
+          servers[name] = {
+            type: 'local',
+            alive: process.process && !process.process.killed,
+            pid: process.process ? process.process.pid : null
+          };
+        }
       });
       res.json(servers);
     });
@@ -61,7 +71,12 @@ class MCPBridge {
         return res.status(500).json({ error: `Server ${serverName} not configured` });
       }
 
-      const response = await this.sendToMCPServer(mcpProcess, message);
+      let response;
+      if (mcpProcess.type === 'remote') {
+        response = await mcpProcess.transport.sendMessage(message);
+      } else {
+        response = await this.sendToMCPServer(mcpProcess, message);
+      }
       res.json(response);
     } catch (error) {
       console.error(`Error handling RPC for ${serverName}:`, error);
@@ -72,7 +87,9 @@ class MCPBridge {
   async getMCPProcess(serverName) {
     if (this.mcpProcesses.has(serverName)) {
       const existing = this.mcpProcesses.get(serverName);
-      if (existing.process && !existing.process.killed) {
+      if (existing.type === 'remote' && existing.transport && existing.transport.isConnected()) {
+        return existing;
+      } else if (existing.type !== 'remote' && existing.process && !existing.process.killed) {
         return existing;
       }
     }
@@ -80,6 +97,10 @@ class MCPBridge {
     const config = this.getServerConfig(serverName);
     if (!config) {
       return null;
+    }
+
+    if (config.type === 'remote') {
+      return this.createRemoteMCPConnection(serverName, config);
     }
 
     return this.spawnMCPProcess(serverName, config);
@@ -226,6 +247,37 @@ class MCPBridge {
     });
   }
 
+  async createRemoteMCPConnection(serverName, config) {
+    console.log(`Creating remote MCP connection: ${serverName}`);
+    
+    // Create transport using the factory
+    const transport = TransportFactory.createTransport(config, serverName);
+    
+    // Initialize the transport
+    await transport.initialize();
+    
+    const remoteConnection = {
+      type: 'remote',
+      serverName: serverName,
+      config: config,
+      transport: transport,
+      initialized: true
+    };
+
+    this.mcpProcesses.set(serverName, remoteConnection);
+    
+    return remoteConnection;
+  }
+
+
+  resolveEnvVar(value) {
+    if (typeof value === 'string' && value.startsWith('${') && value.endsWith('}')) {
+      const envVar = value.slice(2, -1);
+      return process.env[envVar] || value;
+    }
+    return value;
+  }
+
   loadConfig(configPath) {
     try {
       const configData = fs.readFileSync(configPath, 'utf8');
@@ -298,20 +350,34 @@ class MCPBridge {
       console.log(`MCP HTTP Bridge running on port ${port}`);
       if (this.cliServer) {
         console.log(`CLI server configured: ${this.cliServer.name}`);
+        console.log(`  URL: http://localhost:${port}/rpc/${encodeURIComponent(this.cliServer.name)}`);
       }
       if (this.config && this.config.servers) {
         console.log(`Config servers: ${Object.keys(this.config.servers).join(', ')}`);
+        Object.keys(this.config.servers).forEach(serverName => {
+          console.log(`  ${serverName}: http://localhost:${port}/rpc/${encodeURIComponent(serverName)}`);
+        });
       }
     });
 
-    process.on('SIGINT', () => {
+    process.on('SIGINT', async () => {
       console.log('\nShutting down...');
-      this.mcpProcesses.forEach((mcpProcess, name) => {
-        if (mcpProcess.process && !mcpProcess.process.killed) {
-          console.log(`Terminating ${name}...`);
-          mcpProcess.process.kill();
+      
+      // Close all transports and processes
+      for (const [name, mcpProcess] of this.mcpProcesses) {
+        try {
+          if (mcpProcess.type === 'remote' && mcpProcess.transport) {
+            console.log(`Closing transport for ${name}...`);
+            await mcpProcess.transport.close();
+          } else if (mcpProcess.process && !mcpProcess.process.killed) {
+            console.log(`Terminating ${name}...`);
+            mcpProcess.process.kill();
+          }
+        } catch (error) {
+          console.error(`Error closing ${name}:`, error);
         }
-      });
+      }
+      
       process.exit(0);
     });
   }

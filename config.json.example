@@ -35,6 +35,33 @@
         "API_KEY": "${API_KEY}",
         "DEBUG": "true"
       }
+    },
+    "remote-openai": {
+      "type": "remote",
+      "url": "https://api.openai.com/v1/mcp",
+      "auth": {
+        "type": "bearer",
+        "token": "${OPENAI_API_KEY}"
+      },
+      "timeout": 30000
+    },
+    "remote-claude": {
+      "type": "remote",
+      "url": "https://api.anthropic.com/v1/mcp",
+      "auth": {
+        "type": "apikey",
+        "header": "x-api-key",
+        "key": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    "remote-basic-auth": {
+      "type": "remote",
+      "url": "https://example.com/mcp",
+      "auth": {
+        "type": "basic",
+        "username": "${MCP_USERNAME}",
+        "password": "${MCP_PASSWORD}"
+      }
     }
   }
 }
