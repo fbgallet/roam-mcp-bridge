@@ -1,0 +1,40 @@
+{
+  "servers": {
+    "@readwise/readwise-mcp": {
+      "command": "npx",
+      "args": ["@readwise/readwise-mcp"],
+      "env": {
+        "ACCESS_TOKEN": "${READWISE_TOKEN}"
+      }
+    },
+    "@anthropic/claude-mcp": {
+      "command": "npx",
+      "args": ["@anthropic/claude-mcp"],
+      "env": {
+        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}"
+      }
+    },
+    "filesystem": {
+      "command": "node",
+      "args": ["/path/to/filesystem-mcp/index.js"],
+      "env": {
+        "ROOT_PATH": "/Users/username/Documents"
+      }
+    },
+    "database": {
+      "command": "python",
+      "args": ["-m", "mcp_server_database"],
+      "env": {
+        "DATABASE_URL": "sqlite:///app.db"
+      }
+    },
+    "custom-server": {
+      "command": "/usr/local/bin/my-mcp-server",
+      "args": ["--config", "/path/to/config"],
+      "env": {
+        "API_KEY": "${API_KEY}",
+        "DEBUG": "true"
+      }
+    }
+  }
+}
